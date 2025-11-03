@@ -1,0 +1,298 @@
+// This is your Prisma schema file
+// Learn more about it at https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserType {
+  TOURIST
+  GUIDE
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+  DELETED
+}
+
+enum GuideApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ExperienceStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  MPESA
+  STRIPE
+  PAYPAL
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model User {
+  id                String      @id @default(uuid())
+  email             String      @unique
+  password          String
+  firstName         String
+  lastName          String
+  phoneNumber       String?
+  avatar            String?
+  userType          UserType    @default(TOURIST)
+  status            UserStatus  @default(PENDING)
+  emailVerified     Boolean     @default(false)
+  verificationToken String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  refreshToken      String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  guide             Guide?
+  touristBookings   Booking[]   @relation("TouristBookings")
+  sentMessages      Message[]   @relation("MessageSender")
+  receivedMessages  Message[]   @relation("MessageReceiver")
+  reviews           Review[]
+  notifications     Notification[]
+
+  @@index([email])
+  @@index([userType, status])
+}
+
+model Guide {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio               String
+  region            String
+  languages         String[]
+  specializations   String[]
+  yearsOfExperience Int
+  licenseNumber     String?
+  rating            Float     @default(0)
+  reviewCount       Int       @default(0)
+  isVerified        Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  experiences       Experience[]
+  guideBookings     Booking[]     @relation("GuideBookings")
+  availability      AvailabilityCalendar[]
+  guideApplication  GuideApplication?
+  reviews           Review[]      @relation("GuideReviews")
+
+  @@index([userId])
+  @@index([rating])
+  @@index([region])
+}
+
+model GuideApplication {
+  id                String                @id @default(uuid())
+  guideId           String                @unique
+  guide             Guide                 @relation(fields: [guideId], references: [id], onDelete: Cascade)
+  resume            String
+  videoIntroduction String?
+  idDocument        String
+  certifications    String[]
+  status            GuideApplicationStatus @default(PENDING)
+  notes             String?
+  reviewedBy        String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([status])
+}
+
+model Experience {
+  id          String           @id @default(uuid())
+  guideId     String
+  guide       Guide            @relation(fields: [guideId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  category    String
+  location    String
+  duration    Int              // Duration in minutes
+  maxGroupSize Int
+  pricePerPerson Decimal       @db.Decimal(10, 2)
+  currency    String           @default("USD")
+  images      String[]
+  inclusions  String[]
+  exclusions  String[]
+  meetingPoint String
+  status      ExperienceStatus @default(DRAFT)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  // Relations
+  bookings    Booking[]
+  reviews     Review[]         @relation("ExperienceReviews")
+
+  @@index([guideId])
+  @@index([category, status])
+  @@index([location])
+}
+
+model Booking {
+  id              String        @id @default(uuid())
+  touristId       String
+  tourist         User          @relation("TouristBookings", fields: [touristId], references: [id])
+  guideId         String
+  guide           Guide         @relation("GuideBookings", fields: [guideId], references: [id])
+  experienceId    String
+  experience      Experience    @relation(fields: [experienceId], references: [id])
+  bookingDate     DateTime
+  startTime       DateTime
+  endTime         DateTime
+  guestCount      Int
+  totalPrice      Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD")
+  status          BookingStatus @default(PENDING)
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  payment         Payment?
+  review          Review?
+
+  @@index([touristId])
+  @@index([guideId])
+  @@index([bookingDate, status])
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD")
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  transactionId   String?
+  paymentDetails  Json?
+  receiptUrl      String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([bookingId])
+  @@index([status])
+  @@index([transactionId])
+}
+
+model Review {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookingId       String?   @unique
+  booking         Booking?  @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  guideId         String
+  guide           Guide     @relation("GuideReviews", fields: [guideId], references: [id], onDelete: Cascade)
+  experienceId    String
+  experience      Experience @relation("ExperienceReviews", fields: [experienceId], references: [id], onDelete: Cascade)
+  rating          Int
+  comment         String
+  guideResponse   String?
+  helpfulCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([guideId, rating])
+  @@index([experienceId])
+}
+
+model Message {
+  id              String        @id @default(uuid())
+  senderId        String
+  sender          User          @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId      String
+  receiver        User          @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  content         String
+  status          MessageStatus @default(SENT)
+  attachment      String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([senderId, receiverId, createdAt])
+  @@index([receiverId, status])
+}
+
+model AvailabilityCalendar {
+  id              String    @id @default(uuid())
+  guideId         String
+  guide           Guide     @relation(fields: [guideId], references: [id], onDelete: Cascade)
+  date            DateTime
+  startTime       DateTime
+  endTime         DateTime
+  isAvailable     Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([guideId, date])
+  @@index([date, isAvailable])
+}
+
+model Notification {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  message         String
+  type            String
+  isRead          Boolean   @default(false)
+  data            Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id              String    @id @default(uuid())
+  userId          String
+  action          String
+  entity          String
+  entityId        String
+  details         Json?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime  @default(now())
+
+  @@index([userId, action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
