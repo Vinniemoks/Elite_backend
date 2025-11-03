@@ -2,35 +2,25 @@ const jwt = require('jsonwebtoken');
 const { redisClient } = require('../config/database');
 
 /**
- * Generate JWT access token
- * @param {Object} payload - User data to include in token
- * @returns {String} JWT token
+ * Generate access token
  */
 const generateToken = (payload) => {
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRY || '7d' }
-  );
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d'
+  });
 };
 
 /**
- * Generate JWT refresh token
- * @param {Object} payload - User data to include in token
- * @returns {String} JWT refresh token
+ * Generate refresh token
  */
 const generateRefreshToken = (payload) => {
-  return jwt.sign(
-    payload,
-    process.env.JWT_REFRESH_SECRET,
-    { expiresIn: process.env.JWT_REFRESH_EXPIRY || '30d' }
-  );
+  return jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
+    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d'
+  });
 };
 
 /**
- * Verify JWT token
- * @param {String} token - JWT token to verify
- * @returns {Object} Decoded token payload
+ * Verify access token
  */
 const verifyToken = (token) => {
   try {
@@ -41,9 +31,7 @@ const verifyToken = (token) => {
 };
 
 /**
- * Verify JWT refresh token
- * @param {String} token - JWT refresh token to verify
- * @returns {Object} Decoded token payload
+ * Verify refresh token
  */
 const verifyRefreshToken = (token) => {
   try {
@@ -54,29 +42,32 @@ const verifyRefreshToken = (token) => {
 };
 
 /**
- * Add token to blacklist in Redis
- * @param {String} token - JWT token to blacklist
- * @param {Number} exp - Token expiration time in seconds
+ * Blacklist token (for logout)
  */
-const blacklistToken = async (token, exp) => {
-  const now = Math.floor(Date.now() / 1000);
-  const ttl = exp - now;
-  
-  if (ttl > 0) {
-    await redisClient.set(`bl_${token}`, 'blacklisted', {
-      EX: ttl
-    });
+const blacklistToken = async (token, expiresAt) => {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = expiresAt - now;
+
+    if (ttl > 0) {
+      await redisClient.setEx(`blacklist:${token}`, ttl, 'true');
+    }
+  } catch (error) {
+    console.error('Error blacklisting token:', error);
   }
 };
 
 /**
  * Check if token is blacklisted
- * @param {String} token - JWT token to check
- * @returns {Boolean} True if blacklisted, false otherwise
  */
 const isTokenBlacklisted = async (token) => {
-  const result = await redisClient.get(`bl_${token}`);
-  return result !== null;
+  try {
+    const result = await redisClient.get(`blacklist:${token}`);
+    return result !== null;
+  } catch (error) {
+    console.error('Error checking blacklist:', error);
+    return false;
+  }
 };
 
 module.exports = {

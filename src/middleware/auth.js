@@ -1,70 +1,111 @@
-const { verifyToken, isTokenBlacklisted } = require('../utils/jwt');
-const { AppError } = require('./errorHandler');
+const jwt = require('jsonwebtoken');
 const { prisma } = require('../config/database');
+const { AppError } = require('./errorHandler');
 
 /**
- * Middleware to protect routes that require authentication
+ * Protect routes - verify JWT token
  */
-const protect = async (req, res, next) => {
+exports.protect = async (req, res, next) => {
   try {
-    // Get token from header
-    const authHeader = req.headers.authorization;
     let token;
-    
-    if (authHeader && authHeader.startsWith('Bearer')) {
-      token = authHeader.split(' ')[1];
+
+    // Get token from header
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
     }
 
-    // Check if token exists
     if (!token) {
       return next(new AppError('Not authorized to access this route', 401));
     }
 
-    // Check if token is blacklisted
-    const blacklisted = await isTokenBlacklisted(token);
-    if (blacklisted) {
-      return next(new AppError('Token revoked, please login again', 401));
+    try {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // Get user from database
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.id },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          userType: true,
+          status: true,
+          emailVerified: true
+        }
+      });
+
+      if (!user) {
+        return next(new AppError('User no longer exists', 401));
+      }
+
+      // Check if user is active
+      if (user.status !== 'ACTIVE') {
+        return next(new AppError('Your account is not active', 401));
+      }
+
+      // Attach user to request
+      req.user = user;
+      next();
+    } catch (error) {
+      return next(new AppError('Invalid or expired token', 401));
     }
-
-    // Verify token
-    const decoded = verifyToken(token);
-
-    // Check if user still exists
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.id }
-    });
-
-    if (!user) {
-      return next(new AppError('User no longer exists', 401));
-    }
-
-    // Check if user is active
-    if (user.status !== 'ACTIVE') {
-      return next(new AppError('User account is not active', 401));
-    }
-
-    // Add user to request object
-    req.user = user;
-    next();
   } catch (error) {
-    next(new AppError('Not authorized to access this route', 401));
+    next(error);
   }
 };
 
 /**
- * Middleware to restrict access based on user type
- * @param {...String} roles - User types allowed to access the route
+ * Restrict access to specific user types
  */
-const restrictTo = (...roles) => {
+exports.restrictTo = (...userTypes) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.userType)) {
-      return next(new AppError('Not authorized to access this route', 403));
+    if (!userTypes.includes(req.user.userType)) {
+      return next(
+        new AppError('You do not have permission to perform this action', 403)
+      );
     }
     next();
   };
 };
 
-module.exports = {
-  protect,
-  restrictTo
+/**
+ * Optional authentication - attach user if token is valid
+ */
+exports.optionalAuth = async (req, res, next) => {
+  try {
+    let token;
+
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await prisma.user.findUnique({
+          where: { id: decoded.id },
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            userType: true,
+            status: true
+          }
+        });
+
+        if (user && user.status === 'ACTIVE') {
+          req.user = user;
+        }
+      } catch (error) {
+        // Token invalid, continue without user
+      }
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 };

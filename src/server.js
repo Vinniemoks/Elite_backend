@@ -16,6 +16,11 @@ const experienceRoutes = require('./routes/experiences');
 const bookingRoutes = require('./routes/bookings');
 const paymentRoutes = require('./routes/payments');
 const messageRoutes = require('./routes/messages');
+const reviewRoutes = require('./routes/reviews');
+const searchRoutes = require('./routes/search');
+const adminRoutes = require('./routes/admin');
+const uploadRoutes = require('./routes/upload');
+const notificationRoutes = require('./routes/notifications');
 
 // Initialize app
 const app = express();
@@ -40,16 +45,46 @@ app.use('/api/experiences', experienceRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/notifications', notificationRoutes);
 
-// Experience reviews routes
-app.use('/api/experiences/:experienceId/reviews', require('./routes/reviews'));
+// API Documentation
+if (process.env.NODE_ENV !== 'production') {
+  const swaggerUi = require('swagger-ui-express');
+  const swaggerSpec = require('./docs/swagger');
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'Server is running'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Check database connection
+    await prisma.$queryRaw`SELECT 1`;
+    
+    // Check Redis connection
+    const redisStatus = redisClient.isReady ? 'connected' : 'disconnected';
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV,
+      services: {
+        database: 'connected',
+        redis: redisStatus
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      message: 'Service unavailable',
+      error: error.message
+    });
+  }
 });
 
 // 404 handler

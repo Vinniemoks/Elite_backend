@@ -1,15 +1,18 @@
-const socketIo = require('socket.io');
-const { verifyToken } = require('../utils/jwt');
+const socketIO = require('socket.io');
+const jwt = require('jsonwebtoken');
 const { prisma } = require('../config/database');
 
-// Connected users map: userId -> socket.id
-const connectedUsers = new Map();
+let io;
 
+/**
+ * Initialize Socket.IO
+ */
 const initializeSocket = (server) => {
-  const io = socketIo(server, {
+  io = socketIO(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN || '*',
-      methods: ['GET', 'POST']
+      origin: process.env.FRONTEND_URL || '*',
+      methods: ['GET', 'POST'],
+      credentials: true
     }
   });
 
@@ -17,57 +20,58 @@ const initializeSocket = (server) => {
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
-      
+
       if (!token) {
-        return next(new Error('Authentication error: Token required'));
+        return next(new Error('Authentication error'));
       }
-      
-      const decoded = await verifyToken(token);
-      
-      if (!decoded) {
-        return next(new Error('Authentication error: Invalid token'));
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.id },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          avatar: true,
+          userType: true
+        }
+      });
+
+      if (!user) {
+        return next(new Error('User not found'));
       }
-      
-      // Attach user to socket
-      socket.user = decoded;
+
+      socket.user = user;
       next();
     } catch (error) {
-      next(new Error('Authentication error: ' + error.message));
+      next(new Error('Authentication error'));
     }
   });
 
+  // Connection handler
   io.on('connection', (socket) => {
-    const userId = socket.user.id;
-    
-    // Add user to connected users
-    connectedUsers.set(userId, socket.id);
-    
-    console.log(`User connected: ${userId}, Socket ID: ${socket.id}`);
-    
-    // Join user to their personal room
-    socket.join(`user:${userId}`);
-    
-    // Handle private message
-    socket.on('private-message', async (data) => {
+    console.log(`User connected: ${socket.user.id}`);
+
+    // Join user's personal room
+    socket.join(socket.user.id);
+
+    // Handle sending messages
+    socket.on('send_message', async (data) => {
       try {
         const { recipientId, content } = data;
-        
-        if (!recipientId || !content) {
-          socket.emit('error', { message: 'Recipient ID and content are required' });
-          return;
-        }
-        
-        // Create message in database
+
+        // Save message to database
         const message = await prisma.message.create({
           data: {
-            senderId: userId,
+            senderId: socket.user.id,
             recipientId,
             content,
-            status: connectedUsers.has(recipientId) ? 'DELIVERED' : 'SENT'
+            status: 'SENT'
           },
           include: {
             sender: {
               select: {
+                id: true,
                 firstName: true,
                 lastName: true,
                 avatar: true
@@ -75,62 +79,87 @@ const initializeSocket = (server) => {
             }
           }
         });
-        
-        // Emit to sender
-        socket.emit('message-sent', message);
-        
-        // Emit to recipient if online
-        if (connectedUsers.has(recipientId)) {
-          io.to(`user:${recipientId}`).emit('new-message', message);
-        }
+
+        // Send to recipient if online
+        io.to(recipientId).emit('new_message', message);
+
+        // Confirm to sender
+        socket.emit('message_sent', message);
       } catch (error) {
-        socket.emit('error', { message: error.message });
+        socket.emit('error', { message: 'Failed to send message' });
       }
     });
-    
+
     // Handle typing indicator
     socket.on('typing', (data) => {
-      const { recipientId, isTyping } = data;
-      
-      if (connectedUsers.has(recipientId)) {
-        io.to(`user:${recipientId}`).emit('user-typing', {
-          userId,
-          isTyping
-        });
-      }
+      const { recipientId } = data;
+      io.to(recipientId).emit('user_typing', {
+        userId: socket.user.id,
+        firstName: socket.user.firstName
+      });
     });
-    
-    // Handle read receipts
-    socket.on('mark-as-read', async (data) => {
+
+    // Handle stop typing
+    socket.on('stop_typing', (data) => {
+      const { recipientId } = data;
+      io.to(recipientId).emit('user_stop_typing', {
+        userId: socket.user.id
+      });
+    });
+
+    // Handle message read
+    socket.on('mark_read', async (data) => {
       try {
         const { messageId } = data;
-        
-        // Update message status
-        const message = await prisma.message.update({
+
+        await prisma.message.update({
           where: { id: messageId },
           data: { status: 'READ' }
         });
-        
-        // Notify sender if online
-        if (connectedUsers.has(message.senderId)) {
-          io.to(`user:${message.senderId}`).emit('message-read', {
-            messageId,
-            readAt: message.updatedAt
-          });
+
+        // Notify sender
+        const message = await prisma.message.findUnique({
+          where: { id: messageId }
+        });
+
+        if (message) {
+          io.to(message.senderId).emit('message_read', { messageId });
         }
       } catch (error) {
-        socket.emit('error', { message: error.message });
+        console.error('Error marking message as read:', error);
       }
     });
-    
-    // Handle disconnect
+
+    // Handle disconnection
     socket.on('disconnect', () => {
-      console.log(`User disconnected: ${userId}`);
-      connectedUsers.delete(userId);
+      console.log(`User disconnected: ${socket.user.id}`);
     });
   });
 
   return io;
 };
 
-module.exports = { initializeSocket };
+/**
+ * Get Socket.IO instance
+ */
+const getIO = () => {
+  if (!io) {
+    throw new Error('Socket.IO not initialized');
+  }
+  return io;
+};
+
+/**
+ * Emit notification to specific user
+ */
+const emitToUser = (userId, event, data) => {
+  if (io) {
+    io.to(userId).emit(event, data);
+  }
+};
+
+module.exports = {
+  initializeSocket,
+  getIO,
+  emitToUser
+};

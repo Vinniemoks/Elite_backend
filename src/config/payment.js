@@ -1,21 +1,23 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const axios = require('axios');
+const Stripe = require('stripe');
 
-// M-Pesa Configuration
+// Stripe configuration
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+// M-Pesa configuration
 const mpesaConfig = {
   consumerKey: process.env.MPESA_CONSUMER_KEY,
   consumerSecret: process.env.MPESA_CONSUMER_SECRET,
-  shortCode: process.env.MPESA_SHORT_CODE,
-  passKey: process.env.MPESA_PASS_KEY,
+  shortCode: process.env.MPESA_SHORTCODE,
+  passKey: process.env.MPESA_PASSKEY,
   callbackUrl: process.env.MPESA_CALLBACK_URL,
-  environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox'
+  environment: process.env.MPESA_ENVIRONMENT || 'sandbox'
 };
 
-// PayPal Configuration
+// PayPal configuration
 const paypalConfig = {
   clientId: process.env.PAYPAL_CLIENT_ID,
   clientSecret: process.env.PAYPAL_CLIENT_SECRET,
-  environment: process.env.NODE_ENV === 'production' ? 'live' : 'sandbox'
+  mode: process.env.PAYPAL_MODE || 'sandbox'
 };
 
 module.exports = {
